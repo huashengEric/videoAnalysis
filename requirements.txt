@@ -1,0 +1,14 @@
+# 抖音音频下载器依赖
+# 安装命令：pip install -r requirements.txt
+
+playwright>=1.44.0    # 浏览器自动化（Chromium 内核）
+httpx>=0.27.0         # 异步 HTTP 客户端（视频下载）
+assemblyai>=0.30.0    # 语音转文字（AssemblyAI SDK）
+requests>=2.32.0      # 调用本地 ASR HTTP 服务
+jieba>=0.42.0         # 中文分词（本地文本分析）
+openai>=1.0.0          # DeepSeek API 客户端（兼容 OpenAI 格式）
+fastapi>=0.115.0       # Web API 框架
+uvicorn>=0.32.0        # ASGI 服务器，运行 FastAPI
+apscheduler>=3.11.0    # 定时任务调度
+markdown>=3.7          # 将 Markdown 转为 HTML（邮件富文本展示）
+yt-dlp>=2024.1.0       # YouTube 等站点下载音频（分析流水线）

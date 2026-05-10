@@ -1,0 +1,36 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# 环境变量（含 API Key，不提交）
+.env
+
+# 数据库（本地数据，不提交）
+data.db
+data.db-shm
+data.db-wal
+
+# 下载的音频/转录文件（体积大，不提交）
+downloads/
+
+# 抖音 Cookies（含登录信息，不提交）
+*.json
+!creators.json
+www.douyin.com_cookies.txt
+
+# 前端依赖
+frontend/node_modules/
+frontend/dist/
+
+# macOS
+.DS_Store
+
+# 日志
+logs/
+*.log
