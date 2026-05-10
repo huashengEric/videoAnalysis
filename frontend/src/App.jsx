@@ -15,7 +15,7 @@ function buildApi(token) {
 // ── Login / Register Screen ──────────────────────────
 
 function AuthScreen({ onLogin }) {
-  const [mode, setMode] = useState('login') // 'login' | 'register'
+  const [mode, setMode] = useState('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -62,8 +62,9 @@ function AuthScreen({ onLogin }) {
           )}
           <div className="form-group">
             <label className="form-label">密码</label>
-            <input className="form-input" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="输入密码"
-              value={password} onChange={e => setPassword(e.target.value)} />
+            <input className="form-input" type="password"
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              placeholder="输入密码" value={password} onChange={e => setPassword(e.target.value)} />
           </div>
           {error && <div className="auth-error">{error}</div>}
           <button className="btn btn-primary auth-submit" type="submit" disabled={loading}>
@@ -81,12 +82,46 @@ function AuthScreen({ onLogin }) {
   )
 }
 
-// ── Main App ─────────────────────────────────────────
+// ── Auth wrapper ─────────────────────────────────────
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('auth_token') || '')
   const [user, setUser] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
+
+  // Verify stored token on mount
+  useEffect(() => {
+    if (!token) { setAuthChecked(true); return }
+    const api = buildApi(token)
+    api.get('/api/auth/me')
+      .then(res => { setUser(res.data); setAuthChecked(true) })
+      .catch(() => {
+        localStorage.removeItem('auth_token'); setToken(''); setAuthChecked(true)
+      })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleLogin = (newToken, newUser) => {
+    localStorage.setItem('auth_token', newToken)
+    setToken(newToken)
+    setUser(newUser)
+  }
+
+  const handleLogout = async () => {
+    try { await buildApi(token).post('/api/auth/logout') } catch {}
+    localStorage.removeItem('auth_token')
+    setToken('')
+    setUser(null)
+  }
+
+  if (!authChecked) return null
+  if (!token || !user) return <AuthScreen onLogin={handleLogin} />
+  return <MainApp token={token} user={user} onLogout={handleLogout} />
+}
+
+// ── Main application (only rendered when authenticated) ──
+
+function MainApp({ token, user, onLogout }) {
+  const api = buildApi(token)
 
   const [creators, setCreators] = useState([])
   const [loadingCreators, setLoadingCreators] = useState(false)
@@ -119,35 +154,6 @@ function App() {
   const [scheduleRuns, setScheduleRuns] = useState([])
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [form, setForm] = useState({ name: '', url: '', max_new_videos: 5, platform: 'douyin' })
-
-  const api = buildApi(token)
-
-  // ── verify token on mount ──
-  useEffect(() => {
-    if (!token) { setAuthChecked(true); return }
-    api.get('/api/auth/me').then(res => {
-      setUser(res.data); setAuthChecked(true)
-    }).catch(() => {
-      localStorage.removeItem('auth_token'); setToken(''); setAuthChecked(true)
-    })
-  }, [])
-
-  const handleLogin = (newToken, newUser) => {
-    localStorage.setItem('auth_token', newToken)
-    setToken(newToken); setUser(newUser)
-  }
-
-  const handleLogout = async () => {
-    try { await api.post('/api/auth/logout') } catch {}
-    localStorage.removeItem('auth_token')
-    setToken(''); setUser(null)
-    setCreators([]); setVideos([]); setSchedules([])
-    setSelectedCreatorId(null)
-  }
-
-  // ── show login if not authenticated ──
-  if (!authChecked) return null
-  if (!token || !user) return <AuthScreen onLogin={handleLogin} />
 
   // ── helpers ──
 
@@ -315,20 +321,22 @@ function App() {
     } catch { setError('删除博主失败。') }
   }
 
-  useEffect(() => { loadCreators() }, [])
+  // ── effects ──
+
+  useEffect(() => { loadCreators() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (activeTab === 'schedule') { loadCreators(); loadSchedules() }
-  }, [activeTab])
+  }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (activeTab === 'schedule' && creators.length > 0 && scheduleForm.creator_indices.length === 0)
       setScheduleForm(p => ({ ...p, creator_indices: creators.map(c => c.id) }))
-  }, [activeTab, creators])
+  }, [activeTab, creators]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (selectedScheduleId) loadScheduleRuns(selectedScheduleId)
-  }, [selectedScheduleId])
+  }, [selectedScheduleId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const onKeyDown = (e) => {
@@ -339,6 +347,8 @@ function App() {
     if (activeResult || activeReadable) window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [activeResult, activeReadable])
+
+  // ── render ──
 
   const tabMeta = {
     analyze: { icon: '📊', label: '内容分析' },
@@ -403,9 +413,7 @@ function App() {
             <div className="sidebar-user-name">{user?.display_name || user?.username}</div>
             {user?.is_admin && <span className="badge badge-admin">管理员</span>}
           </div>
-          <button className="btn btn-secondary btn-sm sidebar-logout" onClick={handleLogout} title="退出登录">
-            退出
-          </button>
+          <button className="btn sidebar-logout" onClick={onLogout} title="退出登录">退出</button>
         </div>
       </aside>
 
@@ -437,7 +445,7 @@ function App() {
         <div className="content-area">
           {error && <div className="error-bar">⚠️ {error}</div>}
 
-          {/* ── 内容分析 Tab ── */}
+          {/* ── 内容分析 ── */}
           {activeTab === 'analyze' && (
             <>
               {selectedCreatorId === null && (
@@ -450,15 +458,10 @@ function App() {
 
               {selectedCreatorId !== null && (
                 <>
-                  {/* Pagination */}
                   <div className="pagination">
-                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedCreatorId, Math.max(1, videosPage - 1))} disabled={loadingVideos || videosPage <= 1}>
-                      ← 上一页
-                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedCreatorId, Math.max(1, videosPage - 1))} disabled={loadingVideos || videosPage <= 1}>← 上一页</button>
                     <span className="page-info">第 <strong>{videosPage}</strong> 页 · 每页 {videosPageSize} 条</span>
-                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedCreatorId, videosPage + 1)} disabled={loadingVideos || !videosHasMore}>
-                      下一页 →
-                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedCreatorId, videosPage + 1)} disabled={loadingVideos || !videosHasMore}>下一页 →</button>
                   </div>
 
                   {loadingVideos && (
@@ -489,20 +492,15 @@ function App() {
                             <div className="video-index">{(videosPage - 1) * videosPageSize + i + 1}</div>
                             <div className="video-title">{v.title || '（无标题）'}</div>
                           </div>
-
                           <div className="video-meta-row">
                             {isYt ? <span className="badge badge-youtube">YouTube</span> : <span className="badge badge-douyin">抖音</span>}
                             {isTop && <span className="badge badge-top">📌 置顶</span>}
                             {isAnalyzed && <span className="badge badge-analyzed">✓ 已分析</span>}
                             {publishAt && <span className="video-date">{publishAt}</span>}
                           </div>
-
                           <div>
-                            <a href={v.video_url} target="_blank" rel="noreferrer" className="video-link">
-                              🔗 {v.video_url}
-                            </a>
+                            <a href={v.video_url} target="_blank" rel="noreferrer" className="video-link">🔗 {v.video_url}</a>
                           </div>
-
                           {!isYt && (
                             <div className="video-stats">
                               <div className="stat-item"><span className="stat-icon">👍</span>{(stats.digg_count ?? 0).toLocaleString()}</div>
@@ -511,7 +509,6 @@ function App() {
                               <div className="stat-item"><span className="stat-icon">⭐</span>{(stats.collect_count ?? 0).toLocaleString()}</div>
                             </div>
                           )}
-
                           <div className="video-actions">
                             <button className="btn btn-readable btn-sm" onClick={() => openReadable(v, false)} disabled={loadingReadableId === v.aweme_id || !v.aweme_id}>
                               {loadingReadableId === v.aweme_id ? <><span className="loading-spinner" /> 整理中</> : '📄 全文阅读'}
@@ -534,15 +531,13 @@ function App() {
             </>
           )}
 
-          {/* ── 博主管理 Tab ── */}
+          {/* ── 博主管理 ── */}
           {activeTab === 'manage' && (
             <div className="manage-layout">
               <div className="card">
                 <div className="card-header">
                   <h3 className="card-title">👥 已添加博主 <span style={{ fontSize: 12, fontWeight: 500, color: '#94a3b8' }}>({creators.length})</span></h3>
-                  <button className="btn btn-secondary btn-sm" onClick={loadCreators} disabled={loadingCreators}>
-                    {loadingCreators ? '刷新中...' : '↻ 刷新'}
-                  </button>
+                  <button className="btn btn-secondary btn-sm" onClick={loadCreators} disabled={loadingCreators}>{loadingCreators ? '刷新中...' : '↻ 刷新'}</button>
                 </div>
                 <div className="card-body">
                   {creators.length === 0 && !loadingCreators && (
@@ -604,23 +599,19 @@ function App() {
                     <label className="form-label">每次最多拉取新视频</label>
                     <input className="form-input" type="number" min="1" value={form.max_new_videos} onChange={e => handleFormChange('max_new_videos', e.target.value)} />
                   </div>
-                  <button className="btn btn-success" style={{ width: '100%', justifyContent: 'center' }} onClick={saveCreator}>
-                    💾 保存博主
-                  </button>
+                  <button className="btn btn-success" style={{ width: '100%', justifyContent: 'center' }} onClick={saveCreator}>💾 保存博主</button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* ── 定时任务 Tab ── */}
+          {/* ── 定时任务 ── */}
           {activeTab === 'schedule' && (
             <div className="manage-layout">
               <div className="card">
                 <div className="card-header">
                   <h3 className="card-title">⏰ 定时任务</h3>
-                  <button className="btn btn-secondary btn-sm" onClick={loadSchedules} disabled={loadingSchedules}>
-                    {loadingSchedules ? '刷新中...' : '↻ 刷新'}
-                  </button>
+                  <button className="btn btn-secondary btn-sm" onClick={loadSchedules} disabled={loadingSchedules}>{loadingSchedules ? '刷新中...' : '↻ 刷新'}</button>
                 </div>
                 <div className="card-body">
                   {loadingSchedules && <div className="muted" style={{ padding: '12px 0' }}>正在加载任务列表...</div>}
