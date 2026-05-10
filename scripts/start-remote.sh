@@ -10,6 +10,7 @@
 #   ASR (faster-whisper) → http://127.0.0.1:9000
 #   FastAPI 后端         → http://127.0.0.1:8000
 #   Vite 前端            → http://0.0.0.0:5173  （Tailscale 可访问）
+#   Cloudflare Tunnel    → https://xxx.trycloudflare.com （公网访问）
 
 set -euo pipefail
 
@@ -99,4 +100,32 @@ echo ""
 
 wait_http "http://127.0.0.1:$API_PORT/api/creators" "后端" 25 || true
 wait_http "http://127.0.0.1:$FRONTEND_PORT/" "前端" 15 || true
-echo "完成。"
+
+# ── Cloudflare Quick Tunnel ──
+CLOUDFLARED="$HOME/.local/bin/cloudflared"
+if [[ -x "$CLOUDFLARED" ]]; then
+  if pgrep -f "cloudflared tunnel" >/dev/null 2>&1; then
+    echo "⚠️  Cloudflare Tunnel 已在运行，跳过"
+  else
+    echo "🌍 启动 Cloudflare Tunnel（公网访问）..."
+    nohup "$CLOUDFLARED" tunnel --url "http://localhost:$FRONTEND_PORT" --no-autoupdate \
+      >"$LOG_DIR/tunnel.log" 2>&1 &
+    echo $! >"$LOG_DIR/tunnel.pid"
+    # 等待 URL 出现在日志中
+    local i=0
+    while (( i < 20 )); do
+      TUNNEL_URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" "$LOG_DIR/tunnel.log" 2>/dev/null | head -1)
+      [[ -n "$TUNNEL_URL" ]] && break
+      sleep 1; i=$((i+1))
+    done
+    if [[ -n "$TUNNEL_URL" ]]; then
+      echo "$TUNNEL_URL" >"$LOG_DIR/tunnel.url"
+      echo "✅ 公网地址: $TUNNEL_URL"
+    else
+      echo "⚠️  Tunnel URL 获取超时，请查看 $LOG_DIR/tunnel.log"
+    fi
+  fi
+fi
+
+echo ""
+echo "完成。查看公网地址: cat $LOG_DIR/tunnel.url"
