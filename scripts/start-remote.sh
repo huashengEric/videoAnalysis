@@ -112,7 +112,7 @@ if [[ -x "$CLOUDFLARED" ]]; then
       >"$LOG_DIR/tunnel.log" 2>&1 &
     echo $! >"$LOG_DIR/tunnel.pid"
     # 等待 URL 出现在日志中
-    local i=0
+    i=0
     while (( i < 20 )); do
       TUNNEL_URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" "$LOG_DIR/tunnel.log" 2>/dev/null | head -1)
       [[ -n "$TUNNEL_URL" ]] && break
