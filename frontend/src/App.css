@@ -1005,3 +1005,146 @@ body {
   .sidebar { display: none; }
   .main-content { margin-left: 0; }
 }
+
+/* ── Auth screen ── */
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f172a;
+}
+
+.auth-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 16px;
+  padding: 40px 36px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.auth-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.auth-logo-icon { font-size: 24px; }
+
+.auth-logo-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.auth-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0 0 24px;
+}
+
+.auth-form { display: flex; flex-direction: column; gap: 16px; }
+
+.auth-form .form-label { color: #94a3b8; }
+
+.auth-form .form-input {
+  background: #0f172a;
+  border-color: #334155;
+  color: #f8fafc;
+}
+
+.auth-form .form-input:focus {
+  border-color: #6366f1;
+  background: #0f172a;
+}
+
+.auth-form .form-input::placeholder { color: #475569; }
+
+.auth-error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #fca5a5;
+}
+
+.auth-submit {
+  width: 100%;
+  justify-content: center;
+  padding: 12px;
+  font-size: 14px;
+  background: #6366f1;
+  color: #fff;
+  border-radius: 10px;
+  margin-top: 4px;
+}
+
+.auth-submit:hover:not(:disabled) { background: #4f46e5; }
+
+.auth-switch {
+  margin-top: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.auth-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: #6366f1;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* ── Sidebar user footer ── */
+.sidebar-user {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid #1e293b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-user-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sidebar-user-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-admin {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.sidebar-logout {
+  padding: 4px 10px;
+  font-size: 11px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #94a3b8;
+  border: 1px solid #334155;
+}
+
+.sidebar-logout:hover { background: #334155; color: #f1f5f9; }

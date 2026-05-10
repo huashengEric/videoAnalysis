@@ -6,10 +6,91 @@ import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
+function buildApi(token) {
+  const inst = axios.create({ baseURL: API_BASE })
+  if (token) inst.defaults.headers.common['Authorization'] = `Bearer ${token}`
+  return inst
+}
+
+// ── Login / Register Screen ──────────────────────────
+
+function AuthScreen({ onLogin }) {
+  const [mode, setMode] = useState('login') // 'login' | 'register'
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!username.trim() || !password) { setError('用户名和密码不能为空'); return }
+    setLoading(true); setError('')
+    try {
+      const url = mode === 'login' ? `${API_BASE}/api/auth/login` : `${API_BASE}/api/auth/register`
+      const payload = mode === 'login'
+        ? { username: username.trim(), password }
+        : { username: username.trim(), password, display_name: displayName.trim() }
+      const res = await axios.post(url, payload)
+      onLogin(res.data.token, res.data.user)
+    } catch (e) {
+      const d = e.response?.data?.detail
+      setError(typeof d === 'string' ? d : mode === 'login' ? '登录失败，请检查用户名和密码' : '注册失败，用户名可能已存在')
+    } finally { setLoading(false) }
+  }
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-logo">
+          <span className="auth-logo-icon">📊</span>
+          <span className="auth-logo-title">视频内容分析</span>
+        </div>
+        <h2 className="auth-title">{mode === 'login' ? '登录账户' : '创建账户'}</h2>
+        <form className="auth-form" onSubmit={submit}>
+          <div className="form-group">
+            <label className="form-label">用户名</label>
+            <input className="form-input" type="text" autoComplete="username" placeholder="输入用户名"
+              value={username} onChange={e => setUsername(e.target.value)} />
+          </div>
+          {mode === 'register' && (
+            <div className="form-group">
+              <label className="form-label">显示名称（可选）</label>
+              <input className="form-input" type="text" placeholder="如：张三"
+                value={displayName} onChange={e => setDisplayName(e.target.value)} />
+            </div>
+          )}
+          <div className="form-group">
+            <label className="form-label">密码</label>
+            <input className="form-input" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="输入密码"
+              value={password} onChange={e => setPassword(e.target.value)} />
+          </div>
+          {error && <div className="auth-error">{error}</div>}
+          <button className="btn btn-primary auth-submit" type="submit" disabled={loading}>
+            {loading ? '处理中...' : mode === 'login' ? '登录' : '注册'}
+          </button>
+        </form>
+        <div className="auth-switch">
+          {mode === 'login'
+            ? <span>还没有账户？<button className="auth-link" onClick={() => { setMode('register'); setError('') }}>注册</button></span>
+            : <span>已有账户？<button className="auth-link" onClick={() => { setMode('login'); setError('') }}>登录</button></span>
+          }
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main App ─────────────────────────────────────────
+
 function App() {
+  const [token, setToken] = useState(() => localStorage.getItem('auth_token') || '')
+  const [user, setUser] = useState(null)
+  const [authChecked, setAuthChecked] = useState(false)
+
   const [creators, setCreators] = useState([])
   const [loadingCreators, setLoadingCreators] = useState(false)
-  const [selectedIndex, setSelectedIndex] = useState(null)
+  const [selectedCreatorId, setSelectedCreatorId] = useState(null)
   const [videos, setVideos] = useState([])
   const [loadingVideos, setLoadingVideos] = useState(false)
   const [videosPage, setVideosPage] = useState(1)
@@ -22,7 +103,7 @@ function App() {
   const [loadingResultId, setLoadingResultId] = useState(null)
   const [activeReadable, setActiveReadable] = useState(null)
   const [loadingReadableId, setLoadingReadableId] = useState(null)
-  const [editingIndex, setEditingIndex] = useState(null)
+  const [editingCreatorId, setEditingCreatorId] = useState(null)
   const [schedules, setSchedules] = useState([])
   const [loadingSchedules, setLoadingSchedules] = useState(false)
   const [scheduleForm, setScheduleForm] = useState({
@@ -39,7 +120,36 @@ function App() {
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [form, setForm] = useState({ name: '', url: '', max_new_videos: 5, platform: 'douyin' })
 
-  const api = axios.create({ baseURL: API_BASE })
+  const api = buildApi(token)
+
+  // ── verify token on mount ──
+  useEffect(() => {
+    if (!token) { setAuthChecked(true); return }
+    api.get('/api/auth/me').then(res => {
+      setUser(res.data); setAuthChecked(true)
+    }).catch(() => {
+      localStorage.removeItem('auth_token'); setToken(''); setAuthChecked(true)
+    })
+  }, [])
+
+  const handleLogin = (newToken, newUser) => {
+    localStorage.setItem('auth_token', newToken)
+    setToken(newToken); setUser(newUser)
+  }
+
+  const handleLogout = async () => {
+    try { await api.post('/api/auth/logout') } catch {}
+    localStorage.removeItem('auth_token')
+    setToken(''); setUser(null)
+    setCreators([]); setVideos([]); setSchedules([])
+    setSelectedCreatorId(null)
+  }
+
+  // ── show login if not authenticated ──
+  if (!authChecked) return null
+  if (!token || !user) return <AuthScreen onLogin={handleLogin} />
+
+  // ── helpers ──
 
   const formatCreateTime = (ts) => {
     const n = Number(ts)
@@ -49,8 +159,9 @@ function App() {
   }
 
   const normalizeMarkdown = (raw) => String(raw || '').replace(/\r\n/g, '\n').trim()
-
   const getInitials = (name) => (name || '?').slice(0, 2).toUpperCase()
+
+  // ── data loaders ──
 
   const loadCreators = async () => {
     try {
@@ -83,14 +194,14 @@ function App() {
   const upsertSchedule = async () => {
     const [hourStr, minuteStr] = String(scheduleForm.time || '09:00').split(':')
     const hour = Number(hourStr); const minute = Number(minuteStr)
+    const allSelected = scheduleForm.creator_indices.length === creators.length
     const payload = {
       name: String(scheduleForm.name || '').trim(),
       enabled: Boolean(scheduleForm.enabled),
       hour: Number.isFinite(hour) ? hour : 9,
       minute: Number.isFinite(minute) ? minute : 0,
       max_new_per_creator: Number(scheduleForm.max_new_per_creator) || 5,
-      creator_indices: Array.isArray(scheduleForm.creator_indices) && creators.length > 0 && scheduleForm.creator_indices.length === creators.length
-        ? [] : Array.isArray(scheduleForm.creator_indices) ? scheduleForm.creator_indices : [],
+      creator_indices: allSelected ? [] : (scheduleForm.creator_indices || []),
       report_email: String(scheduleForm.report_email || '').trim() || null,
       generate_summary: Boolean(scheduleForm.generate_summary),
     }
@@ -122,10 +233,10 @@ function App() {
     } catch { setError('触发执行失败。') }
   }
 
-  const loadVideos = async (index, page = 1) => {
+  const loadVideos = async (creatorId, page = 1) => {
     try {
-      setSelectedIndex(index); setLoadingVideos(true); setError(''); setVideos([]); setVideosPage(page)
-      const res = await api.get(`/api/creators/${index}/videos`, { params: { page, page_size: videosPageSize } })
+      setSelectedCreatorId(creatorId); setLoadingVideos(true); setError(''); setVideos([]); setVideosPage(page)
+      const res = await api.get(`/api/creators/${creatorId}/videos`, { params: { page, page_size: videosPageSize } })
       const data = res.data
       const items = Array.isArray(data) ? data : data?.items
       setVideos(items || [])
@@ -139,7 +250,7 @@ function App() {
       setAnalyzingUrl(video.video_url); setError('')
       const analysisMode = String(video.platform || video.source_platform || '').toLowerCase() === 'youtube' || /youtube\.com|youtu\.be/i.test(String(video.video_url || '')) ? 'youtube' : 'douyin'
       await api.post('/api/analyze', { video_url: video.video_url, aweme_id: video.aweme_id, analysis_mode: analysisMode })
-      if (selectedIndex !== null) await loadVideos(selectedIndex, videosPage)
+      if (selectedCreatorId !== null) await loadVideos(selectedCreatorId, videosPage)
       await openResult(video)
     } catch { setError('分析失败，请查看后端日志。') }
     finally { setAnalyzingUrl('') }
@@ -165,14 +276,13 @@ function App() {
     finally { setLoadingResultId(null) }
   }
 
-  const selectForEdit = (idx) => {
-    setEditingIndex(idx)
-    const c = creators[idx]
-    setForm({ name: c.name || '', url: c.url || '', max_new_videos: c.max_new_videos ?? 5, platform: c.platform || 'douyin' })
+  const selectForEdit = (creator) => {
+    setEditingCreatorId(creator.id)
+    setForm({ name: creator.name || '', url: creator.url || '', max_new_videos: creator.max_new_videos ?? 5, platform: creator.platform || 'douyin' })
   }
 
   const resetFormForCreate = () => {
-    setEditingIndex(null)
+    setEditingCreatorId(null)
     setForm({ name: '', url: '', max_new_videos: 5, platform: 'douyin' })
   }
 
@@ -188,19 +298,19 @@ function App() {
     try {
       setError('')
       const payload = { name: form.name.trim(), url: form.url.trim(), max_new_videos: Number(form.max_new_videos) || 5, platform: form.platform || 'douyin' }
-      if (editingIndex == null) await api.post('/api/creators', payload)
-      else await api.put(`/api/creators/${editingIndex}`, payload)
+      if (editingCreatorId == null) await api.post('/api/creators', payload)
+      else await api.put(`/api/creators/${editingCreatorId}`, payload)
       await loadCreators(); alert('保存成功')
     } catch { setError('保存博主配置失败。') }
   }
 
-  const deleteCreator = async (idx) => {
+  const deleteCreator = async (creatorId) => {
     if (!window.confirm('确定要删除这个博主吗？')) return
     try {
       setError('')
-      await api.delete(`/api/creators/${idx}`)
+      await api.delete(`/api/creators/${creatorId}`)
       await loadCreators()
-      if (editingIndex === idx) resetFormForCreate()
+      if (editingCreatorId === creatorId) resetFormForCreate()
       alert('已删除')
     } catch { setError('删除博主失败。') }
   }
@@ -213,7 +323,7 @@ function App() {
 
   useEffect(() => {
     if (activeTab === 'schedule' && creators.length > 0 && scheduleForm.creator_indices.length === 0)
-      setScheduleForm(p => ({ ...p, creator_indices: creators.map((_, idx) => idx) }))
+      setScheduleForm(p => ({ ...p, creator_indices: creators.map(c => c.id) }))
   }, [activeTab, creators])
 
   useEffect(() => {
@@ -235,6 +345,8 @@ function App() {
     manage: { icon: '👥', label: '博主管理' },
     schedule: { icon: '⏰', label: '定时任务' },
   }
+
+  const selectedCreator = creators.find(c => c.id === selectedCreatorId)
 
   return (
     <div className="app-root">
@@ -262,13 +374,13 @@ function App() {
               <button className="sidebar-refresh-btn" onClick={loadCreators} disabled={loadingCreators}>
                 {loadingCreators ? '🔄 刷新中...' : '↻ 刷新列表'}
               </button>
-              {creators.map((c, idx) => {
+              {creators.map((c) => {
                 const platform = (c.platform || 'douyin').toLowerCase()
                 return (
                   <div
-                    key={idx}
-                    className={`sidebar-creator-item${selectedIndex === idx ? ' active' : ''}`}
-                    onClick={() => loadVideos(idx)}
+                    key={c.id}
+                    className={`sidebar-creator-item${selectedCreatorId === c.id ? ' active' : ''}`}
+                    onClick={() => loadVideos(c.id)}
                   >
                     <div className={`creator-avatar ${platform}`}>{getInitials(c.name)}</div>
                     <div className="sidebar-creator-info">
@@ -284,6 +396,17 @@ function App() {
             </div>
           </>
         )}
+
+        {/* ── User info + logout ── */}
+        <div className="sidebar-user">
+          <div className="sidebar-user-info">
+            <div className="sidebar-user-name">{user?.display_name || user?.username}</div>
+            {user?.is_admin && <span className="badge badge-admin">管理员</span>}
+          </div>
+          <button className="btn btn-secondary btn-sm sidebar-logout" onClick={handleLogout} title="退出登录">
+            退出
+          </button>
+        </div>
       </aside>
 
       {/* ── Main ── */}
@@ -292,9 +415,9 @@ function App() {
           <div className="topbar-title">
             <span className="topbar-title-icon">{tabMeta[activeTab].icon}</span>
             {tabMeta[activeTab].label}
-            {activeTab === 'analyze' && selectedIndex !== null && creators[selectedIndex] && (
+            {activeTab === 'analyze' && selectedCreator && (
               <span style={{ fontSize: 13, fontWeight: 500, color: '#6366f1', marginLeft: 4 }}>
-                · {creators[selectedIndex].name}
+                · {selectedCreator.name}
               </span>
             )}
           </div>
@@ -305,7 +428,7 @@ function App() {
             {activeTab === 'schedule' && (
               <button className="btn btn-primary btn-sm" onClick={() => {
                 setSelectedScheduleId(null); setScheduleRuns([])
-                setScheduleForm(prev => ({ ...prev, name: '每日自动拉取分析', enabled: true, time: '09:00', max_new_per_creator: 5, creator_indices: creators.map((_, i) => i), report_email: '', generate_summary: true }))
+                setScheduleForm(prev => ({ ...prev, name: '每日自动拉取分析', enabled: true, time: '09:00', max_new_per_creator: 5, creator_indices: creators.map(c => c.id), report_email: '', generate_summary: true }))
               }}>+ 新建任务</button>
             )}
           </div>
@@ -317,7 +440,7 @@ function App() {
           {/* ── 内容分析 Tab ── */}
           {activeTab === 'analyze' && (
             <>
-              {selectedIndex === null && (
+              {selectedCreatorId === null && (
                 <div className="empty-state">
                   <div className="empty-icon">👈</div>
                   <p className="empty-title">请在左侧选择一位博主</p>
@@ -325,20 +448,19 @@ function App() {
                 </div>
               )}
 
-              {selectedIndex !== null && (
+              {selectedCreatorId !== null && (
                 <>
                   {/* Pagination */}
                   <div className="pagination">
-                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedIndex, Math.max(1, videosPage - 1))} disabled={loadingVideos || videosPage <= 1}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedCreatorId, Math.max(1, videosPage - 1))} disabled={loadingVideos || videosPage <= 1}>
                       ← 上一页
                     </button>
                     <span className="page-info">第 <strong>{videosPage}</strong> 页 · 每页 {videosPageSize} 条</span>
-                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedIndex, videosPage + 1)} disabled={loadingVideos || !videosHasMore}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => loadVideos(selectedCreatorId, videosPage + 1)} disabled={loadingVideos || !videosHasMore}>
                       下一页 →
                     </button>
                   </div>
 
-                  {/* Loading */}
                   {loadingVideos && (
                     <div className="empty-state">
                       <div className="empty-icon">⏳</div>
@@ -346,7 +468,6 @@ function App() {
                     </div>
                   )}
 
-                  {/* Empty */}
                   {!loadingVideos && videos.length === 0 && (
                     <div className="empty-state">
                       <div className="empty-icon">📭</div>
@@ -355,7 +476,6 @@ function App() {
                     </div>
                   )}
 
-                  {/* Video grid */}
                   <div className="video-grid">
                     {videos.map((v, i) => {
                       const stats = v.stats || {}
@@ -417,7 +537,6 @@ function App() {
           {/* ── 博主管理 Tab ── */}
           {activeTab === 'manage' && (
             <div className="manage-layout">
-              {/* 博主列表 */}
               <div className="card">
                 <div className="card-header">
                   <h3 className="card-title">👥 已添加博主 <span style={{ fontSize: 12, fontWeight: 500, color: '#94a3b8' }}>({creators.length})</span></h3>
@@ -434,10 +553,10 @@ function App() {
                     </div>
                   )}
                   <ul className="creator-manage-list">
-                    {creators.map((c, idx) => {
+                    {creators.map((c) => {
                       const platform = (c.platform || 'douyin').toLowerCase()
                       return (
-                        <li key={idx} className="creator-manage-item">
+                        <li key={c.id} className="creator-manage-item">
                           <div className={`creator-avatar ${platform}`} style={{ width: 36, height: 36 }}>{getInitials(c.name)}</div>
                           <div className="creator-manage-info">
                             <div className="creator-manage-name">
@@ -447,8 +566,8 @@ function App() {
                             <div className="creator-manage-url">{c.url}</div>
                           </div>
                           <div className="creator-manage-actions">
-                            <button className="btn btn-secondary btn-sm" onClick={() => selectForEdit(idx)}>编辑</button>
-                            <button className="btn btn-danger btn-sm" onClick={() => deleteCreator(idx)}>删除</button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => selectForEdit(c)}>编辑</button>
+                            <button className="btn btn-danger btn-sm" onClick={() => deleteCreator(c.id)}>删除</button>
                           </div>
                         </li>
                       )
@@ -457,11 +576,10 @@ function App() {
                 </div>
               </div>
 
-              {/* 编辑/新增表单 */}
               <div className="card">
                 <div className="card-header">
-                  <h3 className="card-title">{editingIndex == null ? '➕ 新增博主' : '✏️ 编辑博主'}</h3>
-                  {editingIndex != null && <button className="btn btn-secondary btn-sm" onClick={resetFormForCreate}>切换为新增</button>}
+                  <h3 className="card-title">{editingCreatorId == null ? '➕ 新增博主' : '✏️ 编辑博主'}</h3>
+                  {editingCreatorId != null && <button className="btn btn-secondary btn-sm" onClick={resetFormForCreate}>切换为新增</button>}
                 </div>
                 <div className="card-body">
                   <div className="form-group">
@@ -497,7 +615,6 @@ function App() {
           {/* ── 定时任务 Tab ── */}
           {activeTab === 'schedule' && (
             <div className="manage-layout">
-              {/* 任务列表 */}
               <div className="card">
                 <div className="card-header">
                   <h3 className="card-title">⏰ 定时任务</h3>
@@ -520,8 +637,8 @@ function App() {
                       return (
                         <li key={s.id} className={`schedule-item${selectedScheduleId === s.id ? ' active' : ''}`} onClick={() => {
                           setSelectedScheduleId(s.id)
-                          const effectiveCreatorIndices = (s.creator_indices || []).length === 0 ? creators.map((_, idx) => idx) : s.creator_indices
-                          setScheduleForm({ name: s.name, enabled: Boolean(s.enabled), time: timeLabel, max_new_per_creator: s.max_new_per_creator ?? 5, creator_indices: effectiveCreatorIndices, report_email: s.report_email || '', generate_summary: Boolean(s.generate_summary) })
+                          const effectiveCreatorIds = (s.creator_indices || []).length === 0 ? creators.map(c => c.id) : s.creator_indices
+                          setScheduleForm({ name: s.name, enabled: Boolean(s.enabled), time: timeLabel, max_new_per_creator: s.max_new_per_creator ?? 5, creator_indices: effectiveCreatorIds, report_email: s.report_email || '', generate_summary: Boolean(s.generate_summary) })
                         }}>
                           <div className={`schedule-status-dot ${s.enabled ? 'enabled' : 'disabled'}`} />
                           <div className="schedule-info">
@@ -539,7 +656,6 @@ function App() {
                 </div>
               </div>
 
-              {/* 任务详情 */}
               <div className="card">
                 <div className="card-header">
                   <h3 className="card-title">{selectedScheduleId ? '✏️ 编辑任务' : '➕ 新建任务'}</h3>
@@ -578,13 +694,13 @@ function App() {
                   <div className="form-group">
                     <label className="form-label">目标博主（已选 {scheduleForm.creator_indices.length}/{creators.length}）</label>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {creators.map((c, idx) => {
-                        const checked = scheduleForm.creator_indices.includes(idx)
+                      {creators.map((c) => {
+                        const checked = scheduleForm.creator_indices.includes(c.id)
                         return (
-                          <label key={idx} className="form-toggle">
+                          <label key={c.id} className="form-toggle">
                             <input type="checkbox" checked={checked} onChange={e => {
                               const next = new Set(scheduleForm.creator_indices)
-                              if (e.target.checked) next.add(idx); else next.delete(idx)
+                              if (e.target.checked) next.add(c.id); else next.delete(c.id)
                               setScheduleForm(p => ({ ...p, creator_indices: Array.from(next).sort((a, b) => a - b) }))
                             }} />
                             <span className="form-toggle-label" style={{ fontWeight: 600 }}>{c.name}</span>

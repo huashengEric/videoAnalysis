@@ -111,14 +111,16 @@ class Schedule:
     hour: int
     minute: int
     max_new_per_creator: int
-    creator_indices: list[int]  # empty means all
+    creator_indices: list[int]  # empty means all; values are DB creator IDs when user_id is set
     report_email: str | None
     generate_summary: bool
     created_at: int
     updated_at: int
+    user_id: int | None = None
 
 
 def _row_to_schedule(row: sqlite3.Row) -> Schedule:
+    keys = row.keys()
     return Schedule(
         id=int(row["id"]),
         name=str(row["name"]),
@@ -128,15 +130,21 @@ def _row_to_schedule(row: sqlite3.Row) -> Schedule:
         max_new_per_creator=int(row["max_new_per_creator"]),
         creator_indices=list(json.loads(row["creator_indices_json"] or "[]")),
         report_email=(str(row["report_email"]).strip() if row["report_email"] is not None else None),
-        generate_summary=bool(row["generate_summary"]) if "generate_summary" in row.keys() else False,
+        generate_summary=bool(row["generate_summary"]) if "generate_summary" in keys else False,
         created_at=int(row["created_at"]),
         updated_at=int(row["updated_at"]),
+        user_id=int(row["user_id"]) if "user_id" in keys and row["user_id"] is not None else None,
     )
 
 
-def list_schedules() -> list[Schedule]:
+def list_schedules(user_id: int | None = None) -> list[Schedule]:
     with _connect() as conn:
-        rows = conn.execute("SELECT * FROM schedules ORDER BY id DESC").fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM schedules WHERE user_id = ? ORDER BY id DESC", (user_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM schedules ORDER BY id DESC").fetchall()
         return [_row_to_schedule(r) for r in rows]
 
 
@@ -156,13 +164,14 @@ def create_schedule(
     report_email: str | None = None,
     generate_summary: bool = False,
     enabled: bool = True,
+    user_id: int | None = None,
 ) -> Schedule:
     now = int(time.time())
     with _connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO schedules (name, enabled, hour, minute, max_new_per_creator, creator_indices_json, report_email, generate_summary, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO schedules (name, enabled, hour, minute, max_new_per_creator, creator_indices_json, report_email, generate_summary, created_at, updated_at, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name,
@@ -175,6 +184,7 @@ def create_schedule(
                 1 if generate_summary else 0,
                 now,
                 now,
+                user_id,
             ),
         )
         sid = int(cur.lastrowid)

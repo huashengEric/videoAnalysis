@@ -30,11 +30,14 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from openai import APIError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, AnyHttpUrl, field_validator
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+import auth_store
+from auth_store import init_auth_db
 
 from watch_creators import load_creators
 from fetch_creator_videos import fetch_creator_videos
@@ -574,19 +577,26 @@ async def _execute_schedule(schedule_id: int) -> None:
 
     run_id = create_run(schedule_id)
     try:
-        creators = load_creators()
-        indices = sch.creator_indices or list(range(len(creators)))
+        # Build creator list — DB-based when user_id is set, legacy file otherwise
+        if sch.user_id is not None:
+            all_db_creators = auth_store.list_creators(sch.user_id)
+            if sch.creator_indices:
+                id_set = set(sch.creator_indices)
+                creators_to_run: list[Any] = [c for c in all_db_creators if c["id"] in id_set]
+            else:
+                creators_to_run = all_db_creators
+        else:
+            legacy = load_creators()
+            indices_legacy = sch.creator_indices or list(range(len(legacy)))
+            creators_to_run = [legacy[i] for i in indices_legacy if 0 <= i < len(legacy)]
+
         window_size = 20
         total_candidates = 0
         total_planned = 0
         total_done = 0
         processed: list[dict[str, Any]] = []
 
-        for idx in indices:
-            if idx < 0 or idx >= len(creators):
-                continue
-            creator = creators[idx]
-            # 兼容 creators.json 的 dict 结构 / 以及 load_creators() 返回的对象结构
+        for creator in creators_to_run:
             if isinstance(creator, dict):
                 creator_name = str(creator.get("name") or "")
                 creator_url = str(creator.get("url") or "")
@@ -594,11 +604,11 @@ async def _execute_schedule(schedule_id: int) -> None:
                 creator_name = str(getattr(creator, "name", "") or "")
                 creator_url = str(getattr(creator, "url", "") or "")
 
-            creator_obj = creators[idx]
+            creator_obj = creator
             try:
                 videos = await fetch_videos_for_creator(creator_obj, max_videos=window_size)
             except Exception as e:
-                print("⚠️ schedule fetch videos failed:", idx, repr(e))
+                print("⚠️ schedule fetch videos failed:", creator_name, repr(e))
                 continue
             if not videos:
                 continue
@@ -734,6 +744,7 @@ def _refresh_scheduler_jobs() -> None:
 async def _on_startup() -> None:
     global _scheduler_started
     init_db()
+    init_auth_db()
     if not _scheduler_started:
         scheduler.start()
         _scheduler_started = True
@@ -753,6 +764,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── 认证依赖 ──────────────────────────────────
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> dict:
+    if not creds:
+        raise HTTPException(status_code=401, detail="未登录")
+    user = auth_store.get_session_user(creds.credentials)
+    if not user:
+        raise HTTPException(status_code=401, detail="会话已过期，请重新登录")
+    return user
 
 
 # ──────────────────────────────────────────────
@@ -959,23 +986,76 @@ async def index() -> str:
 
 
 # ──────────────────────────────────────────────
+# API：用户认证
+# ──────────────────────────────────────────────
+
+class RegisterIn(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+def _user_public(u: dict) -> dict:
+    return {
+        "id": u["id"],
+        "username": u["username"],
+        "display_name": u["display_name"],
+        "is_admin": bool(u["is_admin"]),
+    }
+
+
+@app.post("/api/auth/register")
+async def api_register(req: RegisterIn) -> dict:
+    username = (req.username or "").strip()
+    if not username or not req.password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    is_first = auth_store.count_users() == 0
+    user_id = auth_store.create_user(username, req.password, req.display_name, is_admin=is_first)
+    if user_id is None:
+        raise HTTPException(status_code=409, detail="用户名已存在")
+    if is_first:
+        auth_store.migrate_creators_json(user_id)
+    token = auth_store.create_session(user_id)
+    user = auth_store.get_user_by_id(user_id)
+    return {"token": token, "user": _user_public(user)}
+
+
+@app.post("/api/auth/login")
+async def api_login(req: LoginIn) -> dict:
+    user = auth_store.authenticate((req.username or "").strip(), req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    token = auth_store.create_session(user["id"])
+    return {"token": token, "user": _user_public(user)}
+
+
+@app.post("/api/auth/logout")
+async def api_logout(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> dict:
+    if creds:
+        auth_store.delete_session(creds.credentials)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def api_me(user: dict = Depends(get_current_user)) -> dict:
+    return _user_public(user)
+
+
+# ──────────────────────────────────────────────
 # API：博主列表与视频列表
 # ──────────────────────────────────────────────
 
 
 @app.get("/api/creators")
-async def api_creators() -> List[Dict[str, Any]]:
-    """返回 creators.json 中的博主列表。"""
-    creators = load_creators()
-    return [
-        {
-            "name": c.name,
-            "url": c.url,
-            "max_new_videos": c.max_new_videos,
-            "platform": getattr(c, "platform", "douyin"),
-        }
-        for c in creators
-    ]
+async def api_creators(user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
+    return auth_store.list_creators(user["id"])
 
 
 class CreatorIn(BaseModel):
@@ -994,55 +1074,43 @@ class CreatorIn(BaseModel):
 
 
 @app.post("/api/creators")
-async def api_create_creator(creator: CreatorIn) -> List[Dict[str, Any]]:
-    """新增博主配置并写回 creators.json。"""
-    data: List[Dict[str, Any]] = (
-        json.loads(CREATORS_FILE.read_text(encoding="utf-8"))
-        if CREATORS_FILE.exists()
-        else []
+async def api_create_creator(
+    creator: CreatorIn, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    return auth_store.add_creator(
+        user["id"],
+        name=creator.name,
+        url=creator.url,
+        platform=creator.platform,
+        max_new_videos=creator.max_new_videos,
     )
-    data.append(creator.model_dump())
-    CREATORS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return data
 
 
-@app.put("/api/creators/{index}")
-async def api_update_creator(index: int, creator: CreatorIn) -> List[Dict[str, Any]]:
-    """按索引更新博主配置。"""
-    data: List[Dict[str, Any]] = (
-        json.loads(CREATORS_FILE.read_text(encoding="utf-8"))
-        if CREATORS_FILE.exists()
-        else []
+@app.put("/api/creators/{creator_id}")
+async def api_update_creator(
+    creator_id: int, creator: CreatorIn, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    ok = auth_store.update_creator(
+        creator_id,
+        user["id"],
+        name=creator.name,
+        url=creator.url,
+        platform=creator.platform,
+        max_new_videos=creator.max_new_videos,
     )
-    if index < 0 or index >= len(data):
-        raise HTTPException(status_code=404, detail="creator index out of range")
-    data[index] = creator.model_dump()
-    CREATORS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return data
+    if not ok:
+        raise HTTPException(status_code=404, detail="creator not found")
+    return auth_store.get_creator(creator_id, user["id"])
 
 
-@app.delete("/api/creators/{index}")
-async def api_delete_creator(index: int) -> Dict[str, Any]:
-    """按索引删除博主配置。"""
-    data: List[Dict[str, Any]] = (
-        json.loads(CREATORS_FILE.read_text(encoding="utf-8"))
-        if CREATORS_FILE.exists()
-        else []
-    )
-    if index < 0 or index >= len(data):
-        raise HTTPException(status_code=404, detail="creator index out of range")
-    deleted = data.pop(index)
-    CREATORS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return {"deleted": deleted, "creators": data}
+@app.delete("/api/creators/{creator_id}")
+async def api_delete_creator(
+    creator_id: int, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    ok = auth_store.delete_creator(creator_id, user["id"])
+    if not ok:
+        raise HTTPException(status_code=404, detail="creator not found")
+    return {"ok": True}
 
 
 def _is_video_analyzed(aweme_id: str) -> bool:
@@ -1051,17 +1119,17 @@ def _is_video_analyzed(aweme_id: str) -> bool:
     return bool(glob.glob(pattern))
 
 
-@app.get("/api/creators/{index}/videos")
+@app.get("/api/creators/{creator_id}/videos")
 async def api_creator_videos(
-    index: int,
+    creator_id: int,
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=50),
+    user: dict = Depends(get_current_user),
 ) -> Any:
-    """获取指定索引的博主最近视频列表，并标记是否已分析。支持分页。"""
-    creators = load_creators()
-    if index < 0 or index >= len(creators):
-        raise HTTPException(status_code=404, detail="creator index out of range")
-    creator = creators[index]
+    """获取指定博主最近视频列表，并标记是否已分析。支持分页。"""
+    creator = auth_store.get_creator(creator_id, user["id"])
+    if not creator:
+        raise HTTPException(status_code=404, detail="creator not found")
     use_paging = page is not None or page_size is not None
     p = int(page or 1)
     ps = int(page_size or 10)
@@ -1187,7 +1255,7 @@ async def api_analyze(req: AnalyzeRequest) -> Dict[str, Any]:
 
 
 @app.get("/api/schedules")
-async def api_list_schedules() -> List[Dict[str, Any]]:
+async def api_list_schedules(user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
     return [
         {
             "id": s.id,
@@ -1202,12 +1270,14 @@ async def api_list_schedules() -> List[Dict[str, Any]]:
             "created_at": s.created_at,
             "updated_at": s.updated_at,
         }
-        for s in list_schedules()
+        for s in list_schedules(user_id=user["id"])
     ]
 
 
 @app.post("/api/schedules")
-async def api_create_schedule(s: ScheduleIn) -> Dict[str, Any]:
+async def api_create_schedule(
+    s: ScheduleIn, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
     _validate_schedule_in(s)
     sch = create_schedule(
         name=s.name.strip(),
@@ -1218,13 +1288,19 @@ async def api_create_schedule(s: ScheduleIn) -> Dict[str, Any]:
         creator_indices=s.creator_indices or [],
         report_email=s.report_email.strip() if s.report_email else None,
         generate_summary=bool(s.generate_summary),
+        user_id=user["id"],
     )
     _refresh_scheduler_jobs()
     return {"ok": True, "schedule": {"id": sch.id}}
 
 
 @app.put("/api/schedules/{schedule_id}")
-async def api_update_schedule(schedule_id: int, s: ScheduleIn) -> Dict[str, Any]:
+async def api_update_schedule(
+    schedule_id: int, s: ScheduleIn, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    existing = get_schedule(schedule_id)
+    if not existing or existing.user_id != user["id"]:
+        raise HTTPException(status_code=404, detail="schedule not found")
     _validate_schedule_in(s)
     sch = update_schedule(
         schedule_id,
@@ -1244,24 +1320,34 @@ async def api_update_schedule(schedule_id: int, s: ScheduleIn) -> Dict[str, Any]
 
 
 @app.delete("/api/schedules/{schedule_id}")
-async def api_delete_schedule(schedule_id: int) -> Dict[str, Any]:
+async def api_delete_schedule(
+    schedule_id: int, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    existing = get_schedule(schedule_id)
+    if not existing or existing.user_id != user["id"]:
+        raise HTTPException(status_code=404, detail="schedule not found")
     delete_schedule(schedule_id)
     _refresh_scheduler_jobs()
     return {"ok": True}
 
 
 @app.get("/api/schedules/{schedule_id}/runs")
-async def api_list_runs(schedule_id: int) -> Dict[str, Any]:
-    if not get_schedule(schedule_id):
+async def api_list_runs(
+    schedule_id: int, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    sch = get_schedule(schedule_id)
+    if not sch or sch.user_id != user["id"]:
         raise HTTPException(status_code=404, detail="schedule not found")
     return {"ok": True, "runs": list_runs(schedule_id, limit=20)}
 
 
 @app.post("/api/schedules/{schedule_id}/run")
-async def api_run_schedule_now(schedule_id: int) -> Dict[str, Any]:
-    if not get_schedule(schedule_id):
+async def api_run_schedule_now(
+    schedule_id: int, user: dict = Depends(get_current_user)
+) -> Dict[str, Any]:
+    sch = get_schedule(schedule_id)
+    if not sch or sch.user_id != user["id"]:
         raise HTTPException(status_code=404, detail="schedule not found")
-    # 在独立线程执行，避免阻塞 API 事件循环
     t = threading.Thread(target=_execute_schedule_sync, args=(schedule_id,), daemon=True)
     t.start()
     return {"ok": True}
