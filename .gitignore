@@ -20,8 +20,7 @@ data.db-wal
 downloads/
 
 # 抖音 Cookies（含登录信息，不提交）
-*.json
-!creators.json
+www.douyin.com_cookies.json
 www.douyin.com_cookies.txt
 
 # 前端依赖
