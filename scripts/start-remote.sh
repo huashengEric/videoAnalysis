@@ -108,22 +108,11 @@ if [[ -x "$CLOUDFLARED" ]]; then
     echo "⚠️  Cloudflare Tunnel 已在运行，跳过"
   else
     echo "🌍 启动 Cloudflare Tunnel（公网访问）..."
-    nohup "$CLOUDFLARED" tunnel --url "http://localhost:$FRONTEND_PORT" --no-autoupdate \
+    nohup "$CLOUDFLARED" tunnel --config "$HOME/.cloudflared/config.yml" run \
       >"$LOG_DIR/tunnel.log" 2>&1 &
     echo $! >"$LOG_DIR/tunnel.pid"
-    # 等待 URL 出现在日志中
-    i=0
-    while (( i < 20 )); do
-      TUNNEL_URL=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" "$LOG_DIR/tunnel.log" 2>/dev/null | head -1)
-      [[ -n "$TUNNEL_URL" ]] && break
-      sleep 1; i=$((i+1))
-    done
-    if [[ -n "$TUNNEL_URL" ]]; then
-      echo "$TUNNEL_URL" >"$LOG_DIR/tunnel.url"
-      echo "✅ 公网地址: $TUNNEL_URL"
-    else
-      echo "⚠️  Tunnel URL 获取超时，请查看 $LOG_DIR/tunnel.log"
-    fi
+    echo "https://app.xiaoheiban.cc" >"$LOG_DIR/tunnel.url"
+    echo "✅ 公网地址: https://app.xiaoheiban.cc"
   fi
 fi
 
