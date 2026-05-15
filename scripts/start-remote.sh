@@ -101,20 +101,60 @@ echo ""
 wait_http "http://127.0.0.1:$API_PORT/api/creators" "后端" 25 || true
 wait_http "http://127.0.0.1:$FRONTEND_PORT/" "前端" 15 || true
 
-# ── Cloudflare Quick Tunnel ──
+# ── Cloudflare Tunnel（LaunchAgent — 崩溃自动重启）──
 CLOUDFLARED="$HOME/.local/bin/cloudflared"
+PLIST_LABEL="com.cloudflare.tunnel"
+PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+
 if [[ -x "$CLOUDFLARED" ]]; then
-  if pgrep -f "cloudflared tunnel" >/dev/null 2>&1; then
-    echo "⚠️  Cloudflare Tunnel 已在运行，跳过"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  cat >"$PLIST_DST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${CLOUDFLARED}</string>
+        <string>tunnel</string>
+        <string>--no-autoupdate</string>
+        <string>--config</string>
+        <string>${HOME}/.cloudflared/config.yml</string>
+        <string>run</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NO_PROXY</key>
+        <string>*</string>
+        <key>no_proxy</key>
+        <string>*</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/tunnel.log</string>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
+PLIST
+
+  if launchctl list "$PLIST_LABEL" >/dev/null 2>&1; then
+    launchctl unload "$PLIST_DST" 2>/dev/null || true
+    launchctl load  "$PLIST_DST"
+    echo "✅ Cloudflare Tunnel 已重新加载（崩溃自动重启已启用）"
   else
-    echo "🌍 启动 Cloudflare Tunnel（公网访问）..."
-    nohup env NO_PROXY='*' no_proxy='*' \
-      "$CLOUDFLARED" tunnel --no-autoupdate --config "$HOME/.cloudflared/config.yml" run \
-      >"$LOG_DIR/tunnel.log" 2>&1 &
-    echo $! >"$LOG_DIR/tunnel.pid"
-    echo "https://app.xiaoheiban.cc" >"$LOG_DIR/tunnel.url"
-    echo "✅ 公网地址: https://app.xiaoheiban.cc"
+    launchctl load "$PLIST_DST"
+    echo "✅ Cloudflare Tunnel 已启动（崩溃自动重启已启用）"
   fi
+  echo "https://app.xiaoheiban.cc" >"$LOG_DIR/tunnel.url"
+  echo "✅ 公网地址: https://app.xiaoheiban.cc"
 fi
 
 echo ""

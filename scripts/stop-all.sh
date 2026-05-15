@@ -27,4 +27,12 @@ kill_pidfile "$LOG_DIR/frontend.pid" "前端"
 kill_pidfile "$LOG_DIR/api.pid" "后端"
 kill_pidfile "$LOG_DIR/asr.pid" "ASR"
 
+# 停止 Cloudflare Tunnel LaunchAgent
+PLIST_LABEL="com.cloudflare.tunnel"
+PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+if launchctl list "$PLIST_LABEL" >/dev/null 2>&1; then
+  echo "🛑 停止 Cloudflare Tunnel (LaunchAgent)"
+  launchctl unload "$PLIST_DST" 2>/dev/null || true
+fi
+
 echo "✅ 已尝试停止（若端口仍被占用，请手动结束占用进程）"
