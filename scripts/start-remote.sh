@@ -109,7 +109,7 @@ if [[ -x "$CLOUDFLARED" ]]; then
   else
     echo "🌍 启动 Cloudflare Tunnel（公网访问）..."
     nohup env NO_PROXY='*' no_proxy='*' \
-      "$CLOUDFLARED" tunnel --config "$HOME/.cloudflared/config.yml" run \
+      "$CLOUDFLARED" tunnel --no-autoupdate --config "$HOME/.cloudflared/config.yml" run \
       >"$LOG_DIR/tunnel.log" 2>&1 &
     echo $! >"$LOG_DIR/tunnel.pid"
     echo "https://app.xiaoheiban.cc" >"$LOG_DIR/tunnel.url"
